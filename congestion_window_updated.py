@@ -1,8 +1,8 @@
+from scapy.all import sniff, IP, TCP
 import dash
 import dash_core_components as dcc
 import dash_html_components as html
 from dash.dependencies import Input, Output
-from scapy.all import sniff, IP, TCP
 import datetime
 import threading
 import time
@@ -12,7 +12,7 @@ timestamps = []
 cwnd_values = []
 
 # Initialize variables for packet tracking
-last_seq = None
+last_ack = None
 retransmissions = 0
 out_of_order = 0
 packet_loss = 0
@@ -25,7 +25,7 @@ packet_queue = []
 
 # Function to start packet sniffing in a separate thread
 def start_sniffing():
-    global last_seq, retransmissions, out_of_order, packet_loss
+    global last_ack, retransmissions, out_of_order, packet_loss
 
     while True:
         # Fetch new packets using Scapy (replace with your own logic)
@@ -52,7 +52,7 @@ app.layout = html.Div(children=[
             'layout': {
                 'title': 'Congestion Window Tracking',
                 'xaxis': {'title': 'Time'},
-                'yaxis': {'title': 'Window Size'},
+                'yaxis': {'title': 'Estimated Congestion Window Size'},
             }
         }
     ),
@@ -117,7 +117,7 @@ app.layout = html.Div(children=[
     [Input('interval-component', 'n_intervals')]
 )
 def update_metrics(n_intervals):
-    global timestamps, cwnd_values, last_seq, retransmissions, out_of_order, packet_loss
+    global timestamps, cwnd_values, last_ack, retransmissions, out_of_order, packet_loss
 
     # Process packets from the queue
     with data_lock:
@@ -133,7 +133,7 @@ def update_metrics(n_intervals):
         'layout': {
             'title': 'Congestion Window Tracking',
             'xaxis': {'title': 'Time'},
-            'yaxis': {'title': 'Window Size'},
+            'yaxis': {'title': 'Estimated Congestion Window Size'},
         }
     }
 
@@ -176,33 +176,31 @@ def update_metrics(n_intervals):
 
 # Scapy packet handling logic
 def packet_handler(packet):
-    global timestamps, cwnd_values, last_seq, retransmissions, out_of_order, packet_loss
+    global timestamps, cwnd_values, last_ack, retransmissions, out_of_order, packet_loss
 
     if IP in packet and TCP in packet:
         # Extract TCP header information
-        seq_num = packet[TCP].seq
-        window_size = packet[TCP].window
+        ack_num = packet[TCP].ack
+        window_size = max(ack_num - last_ack, 0) if last_ack is not None else 0
 
         # Update Congestion Window Tracking
         timestamps.append(datetime.datetime.now())
         cwnd_values.append(window_size)
-        
 
         # Detect retransmissions
-        if last_seq is not None and seq_num < last_seq:
+        if last_ack is not None and ack_num < last_ack:
             retransmissions += 1
 
         # Detect out-of-order packets
-        if last_seq is not None and seq_num != last_seq + 1:
+        if last_ack is not None and ack_num != last_ack + 1:
             out_of_order += 1
 
         # Check for packet loss
         if packet_loss == 0 and window_size < cwnd_values[-2]:  # Assuming cwnd_values[-2] is the previous window size
             packet_loss += 1
 
-        # Update last sequence number
-        last_seq = seq_num
-
+        # Update last acknowledgment number
+        last_ack = ack_num
 # Start the packet sniffing thread
 sniffing_thread = threading.Thread(target=start_sniffing)
 sniffing_thread.daemon = True
